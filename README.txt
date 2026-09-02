@@ -1,4 +1,4 @@
-Git 仓库地址：待创建远程仓库后填写
+Git 仓库地址：https://github.com/shenzhongpei/tracegraph-coder
 
 项目名称：TraceGraph Coder
 
