@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracegraph-coder"
+version = "0.1.0"
+description = "A lightweight evidence-driven coding agent implemented without agent frameworks."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+tracegraph-coder = "tracegraph_coder.cli:main"
+tracegraph-coder-web = "tracegraph_coder.web_app:main"
+
+[tool.setuptools]
+packages = ["tracegraph_coder"]
+
+[tool.setuptools.package-data]
+tracegraph_coder = ["web/index.html", "web/assets/*.css", "web/assets/*.js"]

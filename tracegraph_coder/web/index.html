@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TraceGraph Coder</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">TC</div>
+          <div class="brand-copy">
+            <strong>TraceGraph Coder</strong>
+            <span>Local Agent Workbench</span>
+          </div>
+        </div>
+        <div class="run-status">
+          <span class="phase-pill" id="phasePill">IDLE</span>
+          <span id="statusText">就绪</span>
+          <span class="elapsed" id="elapsedText">00:00</span>
+        </div>
+      </header>
+
+      <main class="workbench">
+        <aside class="config-panel" aria-label="对话和运行配置">
+          <section class="conversation-sidebar" aria-label="历史对话">
+            <div class="section-title">
+              <span>对话</span>
+              <button class="secondary-button compact-button" id="newConversationButton" type="button">新对话</button>
+            </div>
+            <div class="conversation-list" id="conversationList">
+              <p class="empty-state">暂无历史对话。</p>
+            </div>
+          </section>
+
+          <section class="settings-sidebar" aria-label="运行配置">
+            <div class="section-title">
+              <span>配置</span>
+              <button class="ghost-button" id="shutdownButton" type="button">关闭服务</button>
+            </div>
+
+            <label class="field">
+              <span>工作区</span>
+              <div class="workspace-row">
+                <input id="workspaceInput" type="text" spellcheck="false" />
+                <button class="ghost-button" id="browseButton" type="button">浏览</button>
+              </div>
+            </label>
+
+            <div class="preset-row" aria-label="服务商预设">
+              <button class="preset-button is-active" type="button" data-provider="openai">OpenAI</button>
+              <button class="preset-button" type="button" data-provider="deepseek">DeepSeek</button>
+              <button class="preset-button" type="button" data-provider="custom">Custom</button>
+            </div>
+
+            <label class="field">
+              <span>API Key</span>
+              <input id="apiKeyInput" type="password" autocomplete="off" placeholder="本次运行临时使用" />
+            </label>
+
+            <label class="toggle-row">
+              <input id="useEnvKeyInput" type="checkbox" checked />
+              <span>使用环境变量密钥</span>
+              <small id="envKeyLabel">未检测</small>
+            </label>
+
+            <label class="field">
+              <span>模型</span>
+              <input id="modelInput" type="text" spellcheck="false" />
+            </label>
+
+            <label class="field">
+              <span>Base URL</span>
+              <input id="baseUrlInput" type="text" spellcheck="false" />
+            </label>
+
+            <div class="split-fields">
+              <label class="field">
+                <span>最大步数</span>
+                <input id="maxStepsInput" type="number" min="1" max="80" value="20" />
+              </label>
+              <label class="toggle-row compact">
+                <input id="autoVerifyInput" type="checkbox" checked />
+                <span>自动验证</span>
+              </label>
+            </div>
+
+            <button class="secondary-button full-width" id="buildGraphButton" type="button">构建仓库图</button>
+
+            <div class="tool-grid" aria-label="本地工具">
+              <span>read_file</span>
+              <span>search_text</span>
+              <span>apply_patch</span>
+              <span>run_command</span>
+              <span>verify</span>
+              <span>repo_graph_query</span>
+              <span>repo_graph_neighborhood</span>
+              <span>record_progress</span>
+              <span>finish_task</span>
+            </div>
+          </section>
+        </aside>
+
+        <section class="main-panel">
+          <section class="task-panel" aria-label="任务输入">
+            <div class="task-head">
+              <label for="taskInput">任务描述</label>
+              <div class="task-actions">
+                <button class="ghost-button" id="clearButton" type="button">清空</button>
+                <button class="ghost-button" id="openReportButton" type="button">打开报告</button>
+                <button class="ghost-button" id="resumeButton" type="button" disabled>继续会话</button>
+                <button class="primary-button" id="runButton" type="button">运行新对话</button>
+              </div>
+            </div>
+            <div class="resume-row">
+              <select class="session-select" id="sessionSelect" disabled>
+                <option value="">新对话（不接续历史）</option>
+              </select>
+              <div class="resume-hint" id="resumeSessionHint">暂无历史会话</div>
+            </div>
+            <textarea
+              id="taskInput"
+              spellcheck="false"
+              placeholder="例如：请阅读这个项目，找到一个可以小幅优化的问题，修改后运行测试，并在最终结果里说明证据链。继续会话时，这里输入下一条消息。"
+            ></textarea>
+          </section>
+
+          <section class="phase-panel" aria-label="阶段状态">
+            <div class="phase-step is-active" data-phase="PLAN">
+              <span>PLAN</span>
+              <b>规划</b>
+            </div>
+            <div class="phase-step" data-phase="LOCATE">
+              <span>LOCATE</span>
+              <b>定位</b>
+            </div>
+            <div class="phase-step" data-phase="READ">
+              <span>READ</span>
+              <b>读取</b>
+            </div>
+            <div class="phase-step" data-phase="PATCH">
+              <span>PATCH</span>
+              <b>修改</b>
+            </div>
+            <div class="phase-step" data-phase="VERIFY">
+              <span>VERIFY</span>
+              <b>验证</b>
+            </div>
+            <div class="phase-step" data-phase="REPORT">
+              <span>REPORT</span>
+              <b>报告</b>
+            </div>
+          </section>
+
+          <section class="metrics-panel" aria-label="运行指标">
+            <div class="metric">
+              <span>索引文件</span>
+              <strong id="filesIndexedText">0</strong>
+            </div>
+            <div class="metric">
+              <span>迭代轮次</span>
+              <strong id="iterationsText">0</strong>
+            </div>
+            <div class="metric">
+              <span>耗时</span>
+              <strong id="metricElapsedText">00:00</strong>
+            </div>
+            <div class="metric wide">
+              <span>报告</span>
+              <strong id="reportPathText">尚未生成</strong>
+            </div>
+          </section>
+
+          <section class="output-panel" aria-label="运行输出">
+            <nav class="tabs" aria-label="输出标签">
+              <button class="tab-button is-active" type="button" data-tab="conversation">对话</button>
+              <button class="tab-button" type="button" data-tab="log">过程日志</button>
+              <button class="tab-button" type="button" data-tab="final">最终结果</button>
+              <button class="tab-button" type="button" data-tab="verify">验证</button>
+              <button class="tab-button" type="button" data-tab="evidence">证据链</button>
+              <button class="tab-button" type="button" data-tab="memory">工作记忆</button>
+              <button class="tab-button" type="button" data-tab="sessions">会话树</button>
+              <button class="tab-button" type="button" data-tab="graph">仓库图</button>
+            </nav>
+
+            <div class="tab-panels">
+              <div class="output-pane conversation-pane is-active" id="conversationOutput" data-panel="conversation">
+                <div class="conversation-toolbar">
+                  <div class="conversation-headline">
+                    <strong id="conversationTitle">暂无对话</strong>
+                    <span id="conversationMeta">选择一个会话，向下滚动查看完整输入和输出。</span>
+                  </div>
+                  <div class="conversation-actions">
+                    <button class="ghost-button" id="conversationCopyButton" type="button" disabled>复制ID</button>
+                  </div>
+                </div>
+                <div class="conversation-thread" id="conversationThread">
+                  <p class="empty-state" id="conversationEmptyState">请选择左侧会话，或者运行一个新任务。</p>
+                </div>
+              </div>
+              <pre class="output-pane" id="logOutput" data-panel="log"></pre>
+              <div class="output-pane markdown-pane" id="finalOutput" data-panel="final">
+                <div class="markdown-toolbar">
+                  <div class="segmented-control" aria-label="最终结果显示模式">
+                    <button class="segment-button is-active" id="markdownPreviewButton" type="button">预览</button>
+                    <button class="segment-button" id="markdownSourceButton" type="button">源码</button>
+                  </div>
+                </div>
+                <article class="markdown-body" id="finalMarkdown"></article>
+                <pre class="markdown-source" id="finalSource"></pre>
+              </div>
+              <pre class="output-pane" id="verifyOutput" data-panel="verify"></pre>
+              <pre class="output-pane" id="evidenceOutput" data-panel="evidence"></pre>
+              <pre class="output-pane" id="memoryOutput" data-panel="memory"></pre>
+              <div class="output-pane session-tree-pane" id="sessionTreeOutput" data-panel="sessions">
+                <div class="session-tree-toolbar">
+                  <div>
+                    <strong>会话树</strong>
+                    <span>追溯用户对话节点，工具调用保存在节点内部</span>
+                  </div>
+                  <button class="ghost-button" id="refreshSessionsButton" type="button">刷新</button>
+                </div>
+                <div class="session-tree-layout">
+                  <div class="session-tree-list" id="sessionTreeList"></div>
+                  <aside class="session-node-detail" id="sessionNodeDetail">
+                    <p class="empty-state">暂无会话节点。</p>
+                  </aside>
+                </div>
+              </div>
+              <pre class="output-pane" id="graphOutput" data-panel="graph"></pre>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
