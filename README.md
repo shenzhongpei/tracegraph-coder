@@ -1,261 +1,184 @@
 # TraceGraph Coder
 
-TraceGraph Coder is a lightweight coding agent implemented without agent frameworks.
-It uses an OpenAI-compatible chat-completions API for model decisions, but all file
-access, command execution, repository indexing, evidence logging, verification, and
-loop control are implemented locally.
+TraceGraph Coder 是一个面向编程任务的轻量级 Coding Agent。它不依赖 LangChain、LlamaIndex、AutoGen、CrewAI、OpenAI Agents SDK 等现成 Agent 框架，只使用 OpenAI 兼容的 Chat Completions / Tool Calling 接口让大模型做规划与决策；文件读写、命令执行、仓库索引、上下文压缩、会话恢复、证据记录、验证与终止条件都由本地代码实现。
 
-This final integrated version keeps TraceGraph Coder as the user-facing workbench
-and merges in the stronger state discipline from ForgeAgent: structured working
-memory, evidence-gated completion, verified experience reuse, and external run
-session summaries.
+项目目标是做一个简化但机制完整的 Claude Code / Codex 风格编程智能体：用户给出自然语言任务后，Agent 会自主选择工具，读取相关代码，生成补丁，运行验证，并给出可追溯的最终结果。
 
-## Design
+## 总体架构
 
 ```text
-CLI / Web workbench
+Web 工作台 / CLI
   -> AgentController
   -> OpenAICompatibleLLM
-  -> ToolRegistry + control tools
+  -> ToolRegistry + 控制工具
   -> ToolEnvironment
   -> RepoGraph / EvidenceLog / WorkingMemory / CodingContext / ContextWindow / Verifier
   -> SessionStore / ExperienceStore
 ```
 
-The agent follows a constrained loop:
+核心执行循环：
 
 ```text
-build repository graph
- -> load project memory and matching verified experience cards
- -> PLAN / LOCATE / READ / PATCH / VERIFY / REPORT phases
- -> compile a coding context packet from repo graph, evidence, working memory, and experience
- -> compact old message context only when needed
- -> ask the model for tool calls under phase constraints
- -> run local tools and append observations to evidence and working memory
- -> apply evidence-backed small patches
- -> verify after source changes and compare verified file fingerprints
- -> repair once if verification fails
- -> accept finish_task only when the local evidence gate passes
- -> write final report, save session summary, and store verified experience cards
+构建仓库图
+ -> 读取项目记忆与历史经验
+ -> 进入 PLAN / LOCATE / READ / PATCH / VERIFY / REPORT 阶段
+ -> 编译仓库图、证据链、工作记忆和经验提示组成的 Coding Context
+ -> 在上下文压力较高时压缩旧对话和旧工具结果
+ -> 调用大模型，让模型自行决定下一步工具
+ -> 本地执行工具并记录证据
+ -> 基于证据生成最小补丁
+ -> 修改后自动验证并检查文件指纹
+ -> 验证通过后才允许完成任务
+ -> 保存报告、会话与可复用经验
 ```
 
-## Innovative Features
+## 核心能力
 
-- Repository evidence graph: indexes files, roles, symbols, imports, local import
-  edges, reverse import edges, calls, and likely source-test relationships before
-  the first model call; Git workspaces respect `.gitignore` through `git ls-files`.
-- Explainable repo retrieval: `repo_graph_query` returns ranked files with scores,
-  matched tokens, and match reasons, so the model sees why a file is a candidate
-  instead of treating retrieval as an opaque list.
-- Impact-neighborhood routing: `repo_graph_neighborhood` expands one file into
-  direct dependencies, dependents, related tests, and related sources before a
-  patch, helping the agent estimate blast radius and choose focused verification.
-- Frontend/backend import support: the graph resolves common Python imports,
-  relative JS/TS imports, slash-style imports, and `@/` or `~/` aliases used by
-  many `src/`-based frontend projects.
-- Project memory: optional `TRACEGRAPH.md` or `AGENTS.md` files provide compact
-  project rules such as test commands, style constraints, and forbidden areas.
-- Phase-constrained controller: mutations are blocked until the agent gathers
-  repository evidence, and every tool action is recorded under a clear phase.
-- Structured working memory: each run keeps bounded local state for target files,
-  hypotheses, changes, verification results, and experience hints. The model can
-  propose progress, but only local tool results can confirm file evidence. Files
-  read before a later mutation are marked stale until re-read, so the agent does
-  not silently edit from outdated line evidence.
-- Evidence-gated completion: `finish_task` is accepted only when changed files were
-  successfully verified after the latest mutation; stale fingerprints reject
-  completion automatically.
-- Agent control tools: `record_progress` and `finish_task` make planning and
-  completion explicit instead of relying on free-form final text.
-- Coding context compiler: every model call gets a task-specific context packet
-  with relevant repository nodes, dependency neighbors, target paths, recent
-  evidence, verification state, and experience hints. The repository graph and
-  evidence chain are used as routing sources instead of being dumped wholesale
-  into the prompt.
-- Task-profiled startup context: before the first model call, the controller
-  classifies the request as UI, test, docs, analysis, conversation, or general
-  coding work and surfaces a small set of likely candidate files. This keeps
-  narrow tasks from turning into broad repository exploration while still
-  allowing the model to choose tools and revise the route.
-- Exploration progress guard: repeated locate/read turns without a workspace
-  change trigger a deterministic nudge that asks the model to patch, verify,
-  finish, or use one targeted missing-evidence call. This catches semantic
-  loops that exact-argument repetition checks cannot see.
-- Adaptive execution harness: the controller watches model-selected tool calls
-  without hard-coding a fixed workflow. It tracks known target/candidate files,
-  semantic exploration signatures, low-novelty search streaks, and post-mutation
-  state. Broad searches are allowed while evidence is still weak, but once
-  useful candidates or changes exist, the harness blocks redundant exploration
-  and pushes the model toward a focused read, patch, verification, or final
-  answer. Harness rejections also feed failure terms back into working memory,
-  so context compression keeps those decision signals visible.
-- Failure control packet: harness rejections, failed verification, repeated tool
-  calls, and completion-gate failures are stored as structured failure events.
-  The coding context compiler re-emits recent events as high-priority planning
-  atoms, so the next model call can see which strategy just failed, which files
-  were involved, and which failure terms should be preserved during compression.
-  This turns failure from a log artifact into an explicit control signal.
-- Layered context-window management: the model receives a bounded working view
-  while the durable session keeps the full transcript. The compactor separates
-  stable task context, current working memory, selected repository/evidence
-  atoms, recent dialogue, semantic anchors, and compressed older trajectory.
-  It also starts a soft compaction pass before the hard limit is reached, so
-  long sessions stay responsive instead of waiting until the context is already
-  full.
-- Failure-experience-aware compression: the controller passes the current task,
-  hypothesis, next step, target paths, modified paths, verified experience terms,
-  and recent failure terms as focus terms. Older observations that match these
-  terms are promoted as anchors, and matching source/test/error lines survive
-  clipping. This keeps information that historically caused failed fixes in
-  view, instead of mechanically trimming by time order.
-- Tool-result digesting: older tool outputs are compacted into concise digests
-  containing the tool name, path/query/command, success status, metadata, and
-  only the focused failure or task-relevant snippet. Unfocused large outputs are
-  represented by result shape rather than raw logs. Exact history remains in the
-  session transcript and evidence log for audit and re-query.
-- Token-aware context pressure: context reports include a conservative
-  provider-independent token estimate, compaction strategy, summarized groups,
-  and preserved anchors. This keeps the implementation framework-free while
-  accounting for Chinese text being more expensive than plain ASCII.
-- Adaptive context budget: when the provider returns real prompt-token usage,
-  the controller calibrates the next context window against that telemetry,
-  including tool-schema overhead. This turns compression from a fixed threshold
-  into an online policy that can tighten itself on token-heavy models while
-  preserving the full durable transcript for resume and audit.
-- Verified experience cards: successful, verified changes can store a compact
-  strategy hint outside the repository and retrieve it for similar future tasks.
-  The agent must still re-read current files and verify again.
-- External session summaries: every run can be saved outside the repository with
-  final text, verification, report path, and working memory, while secrets are
-  redacted.
-- Conversation-thread memory: each visible conversation keeps the full redacted
-  model/tool transcript, working memory, iteration cursor, and final report
-  metadata outside the repository. Completed conversations remain continuable:
-  a new user message is appended to the same thread so the next model call sees
-  the earlier dialogue. Large tool outputs are externalized into per-session blob
-  files so the main session record stays lightweight while still recoverable.
-- Codex-style conversation picker: the Web workbench lists continuable
-  conversations for the selected workspace. Selecting one and pressing
-  **继续会话** appends the task box text to that same conversation; pressing
-  **新对话** starts a fresh root thread with no previous transcript.
-- Evidence-driven execution: every tool call is stored in `.tracegraph/evidence.jsonl`.
-- Evidence-chain view: Web UI and reports summarize the action trail, tool
-  arguments, success status, and observations for auditing.
-- Snapshot-based verification: any source change, including changes made by
-  commands, triggers automatic verification and a per-run workspace diff.
-- Fresh graph after mutation: mutating tools refresh the repository graph and
-  the controller synchronizes that graph before compiling the next coding
-  context, so newly created symbols and files can influence the next plan.
-- Repetition guard: identical tool calls are counted across resumed history and
-  blocked after a small limit, pushing the model to change search range or revise
-  its plan instead of burning steps in a loop.
-- Verifier-guided repair: one repair loop is allowed if verification fails.
-- Markdown final rendering: the Web workbench renders final answers as Markdown
-  and keeps a source view for audit/debugging.
-- Local safety boundary: paths are restricted to the workspace, dangerous commands
-  are blocked, shell chaining is rejected, commands run without `shell=True`, and
-  outputs are timeout-limited and secret-redacted.
-- Strict tool contracts: tool arguments are validated locally before execution.
-- Framework-free implementation: no LangChain, LlamaIndex, AutoGen, CrewAI, or
-  hosted code execution.
+- 本地文件工具：支持列文件、读文件、批量读文件、新建文件、补丁修改。
+- 本地命令工具：支持安全执行单条命令，禁止 shell 串联和危险命令。
+- 仓库图工具：支持查询相关文件、依赖邻域、反向依赖、相关测试。
+- 会话记忆工具：支持读取当前工作区的历史对话，继续未完成任务。
+- 验证工具：修改后可自动运行测试或显式调用验证工具。
+- Web 工作台：提供类似 Codex 的对话区、过程列表、最终结果、证据链、工作记忆、会话树和仓库图视图。
+- CLI 模式：保留命令行入口，便于调试和脚本化运行。
 
-## Run
+## 创新点
 
-### Web workbench mode (recommended)
+### 1. 仓库证据图
 
-Double-click the Windows launcher:
+Agent 启动时会先构建 RepoGraph，索引文件路径、语言类型、模块角色、符号、导入关系、反向导入关系、函数调用和测试关联。大模型不需要一次性看到所有代码，而是通过 `repo_graph_query` 和 `repo_graph_neighborhood` 按需检索相关文件。
+
+这相当于给 Agent 提供一个轻量级的代码地图：先定位，再精读，再修改，减少无效上下文消耗。
+
+### 2. 可解释检索
+
+仓库图查询不会只返回文件名，还会返回匹配分数、命中的关键词和推荐原因。模型可以知道“为什么这个文件可能相关”，而不是面对一个黑盒检索结果。
+
+### 3. 证据驱动执行
+
+每一次工具调用都会写入 `.tracegraph/evidence.jsonl`。Agent 修改代码前必须已有仓库证据，修改代码后必须验证。最终完成不是靠模型自己说“完成了”，而是由本地 evidence gate 检查：
+
+- 是否发生过修改；
+- 修改之后是否运行过验证；
+- 验证时的文件指纹是否仍然匹配当前文件。
+
+### 4. 结构化工作记忆
+
+`WorkingMemory` 会记录当前任务阶段、候选文件、目标路径、已读文件、已修改文件、验证结果、历史经验提示和失败信号。模型可以通过 `record_progress` 更新假设和下一步计划，但文件证据、修改记录和验证状态只能由本地工具结果确认。
+
+### 5. 失败经验感知上下文压缩
+
+这是项目最重要的创新点之一。传统上下文压缩容易按时间裁剪，导致失败原因、错误输出、关键文件线索被挤出窗口。TraceGraph Coder 会把重复搜索、验证失败、harness 拦截、完成门控失败等事件结构化为 `FailureEvent`，再编译成高优先级的 `Failure Control Packet`。
+
+下一轮调用模型时，这些失败事件会被显式保留，让模型知道：
+
+- 哪种搜索策略刚刚失败；
+- 哪些文件已经足够可疑；
+- 哪些错误关键词必须继续保留；
+- 下一步应该改为精读、补丁、验证或收敛回答。
+
+这把“失败日志”转化成了“上下文调度信号”，让 Agent 更少重复犯错。
+
+### 6. 自适应执行 Harness
+
+Harness 不写死固定流程，而是观察模型选择的工具是否低收益：
+
+- 重复调用相同工具会被拦截；
+- 已经有候选文件后继续泛搜会被拦截；
+- 修改代码后又回到大范围搜索会被拦截；
+- 连续探索没有新证据时会提示模型收敛。
+
+它的作用不是代替模型规划，而是在模型跑偏时提供轻量级控制。
+
+### 7. 分层上下文管理
+
+系统保留完整会话记录，但每次发给模型的是压缩后的工作视图。上下文由几层组成：
+
+- 系统规则；
+- 当前任务；
+- 工作记忆；
+- 仓库图候选节点；
+- 最近证据；
+- 历史经验；
+- 压缩后的旧工具结果。
+
+当上下文压力变大时，系统会优先保留目标文件、失败关键词、验证输出和最近用户意图，旧的大段工具结果会压缩成摘要。
+
+### 8. 可继续会话
+
+每个工作区拥有独立的会话记录。用户可以像使用 Codex 一样在左侧选择历史对话继续，也可以点击“新对话”开启一个全新的上下文。大工具输出会被外置为 blob 文件，主会话索引保持轻量。
+
+### 9. 本地安全边界
+
+所有路径都会限制在当前工作区内。命令执行拒绝危险命令和 shell 串联，工具参数本地校验，输出会脱敏，API Key 不写入仓库，也不会通过默认接口回传给前端。
+
+## 运行方式
+
+### Web 工作台
+
+Windows 下可直接双击：
 
 ```text
 TraceGraph Coder Web.pyw
 ```
 
-It starts a local server on `127.0.0.1` and opens a browser-based workbench. The
-left panel lists continuable conversations first, with a **新对话** button for
-starting a fresh root conversation; runtime settings such as workspace, provider
-preset, API key, model, Base URL, max steps, and auto-verify sit below it. The
-main panel contains the task editor, phase rail, run metrics, and tabbed outputs
-for process logs, final result, verification, evidence chain, working memory,
-session tree, and repository graph.
-The final-result tab renders Markdown by default and also provides a source view
-for auditing the raw model output.
-If the selected workspace has saved conversations, the left conversation
-list and task-panel picker both enable **继续会话** to resume from the saved
-transcript and working memory. Text entered in the task box while resuming is
-appended as the next user message in the same conversation. When a conversation
-is selected, the primary action sends the task box text into that conversation;
-after **新对话** is pressed, the primary action starts a fresh root thread instead.
-Completed conversations can still be continued; if a completed conversation is
-selected, enter a new message before continuing it.
-The **会话树** tab shows saved conversation nodes rather than internal tool-call
-checkpoints. Click any node to inspect its parent, tree id, status, iteration
-count, and summary; nodes with saved messages can be set as the current
-conversation. Internal tool calls remain inside the node's full transcript and
-evidence log instead of appearing as separate tree nodes.
+它会启动本地服务并打开浏览器工作台。左侧可以选择工作区、填写模型配置、查看历史会话；主区域可以输入任务、继续会话、查看模型执行过程、最终结果、验证结果、证据链、工作记忆、会话树和仓库图。
 
-API keys are not returned by the defaults API and are not saved to browser local
-storage. You can either type a key for the current run or enable environment-key
-mode to use `TRACEGRAPH_API_KEY`, `OPENAI_API_KEY`, or `DEEPSEEK_API_KEY` from the
-local process environment. Use **关闭服务** in the top-left configuration panel to
-stop the local server when finished.
-
-### Command-line mode
-
-Command-line mode is still available for debugging:
+API Key 可以在界面中临时输入，也可以通过环境变量提供：
 
 ```powershell
-cd tracegraph_coder
 $env:TRACEGRAPH_API_KEY="..."
 $env:TRACEGRAPH_MODEL="your-model"
-python -m tracegraph_coder --workspace path\to\repo "fix the failing login test"
 ```
 
-For DeepSeek-compatible use:
+如果使用 DeepSeek 兼容接口：
 
 ```powershell
 $env:DEEPSEEK_API_KEY="..."
 $env:TRACEGRAPH_MODEL="deepseek-chat"
-python -m tracegraph_coder --workspace path\to\repo "add input validation"
 ```
 
-Only build the repository graph:
+### 命令行模式
+
+```powershell
+python -m tracegraph_coder --workspace path\to\repo "修复失败的登录测试"
+```
+
+只构建仓库图：
 
 ```powershell
 python -m tracegraph_coder --workspace path\to\repo --graph-only
 ```
 
-Show the latest saved session without calling the model:
+查看最近保存的会话：
 
 ```powershell
 python -m tracegraph_coder --workspace path\to\repo --show-session
 ```
 
-Continue the latest saved conversation:
+继续最近会话：
 
 ```powershell
-python -m tracegraph_coder --workspace path\to\repo --resume-session
+python -m tracegraph_coder --workspace path\to\repo --resume-session "继续修复刚才的验证失败"
 ```
 
-Continue the latest saved conversation with a new user message:
-
-```powershell
-python -m tracegraph_coder --workspace path\to\repo --resume-session "继续沿着刚才的方向修复验证失败"
-```
-
-List verified experience cards:
+查看历史经验卡：
 
 ```powershell
 python -m tracegraph_coder --workspace path\to\repo --show-experiences
 ```
 
-Disable experience lookup/storage for one run:
+## 测试
 
 ```powershell
-python -m tracegraph_coder --workspace path\to\repo --no-experience "fix the failing test"
-```
-
-## Test
-
-```powershell
-cd tracegraph_coder
 python -m unittest discover -s tests
 ```
+
+当前测试覆盖 controller、repo graph、tools、working memory、context window、session 和 Web app 等核心模块。
+
+## 安全与提交说明
+
+- 项目不包含任何真实 API Key。
+- API Key 请通过环境变量或运行时输入提供。
+- `.tracegraph/`、`__pycache__/`、本地报告和临时任务文件不会提交到仓库。
+- 本项目的 Agent 核心逻辑由本地 Python 实现，没有封装任何现成 Agent 产品或 Agent 框架。
